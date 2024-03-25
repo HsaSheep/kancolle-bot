@@ -14,6 +14,8 @@ from dotenv import load_dotenv
 import discord
 from discord.ext import tasks
 from discord import app_commands
+import logging
+import logging.handlers
 
 from pynamodb.attributes import ListAttribute, NumberAttribute, UnicodeAttribute
 from pynamodb.models import Model
@@ -21,7 +23,7 @@ from pynamodb.models import Model
 from openai import OpenAI
 
 load_dotenv()
-
+discord.utils.setup_logging(level=logging.INFO, root=False)
 
 class kancolle_table(Model):
     class Meta:
@@ -152,7 +154,7 @@ async def on_ready():
     print(f"PID:{os.getpid()}")
     await tree.sync()
     await loop.start()
-    await loop2.start()
+    # await loop2.start()
 
 
 @fubuki_bot.event
@@ -203,20 +205,22 @@ async def on_voice_state_update(member, before, after):
 
 
 @fubuki_bot.event
-async def on_interaction(inter: discord.Interaction):
+async def on_interaction(disco: discord):
     try:
-        if inter.data["component_type"] == 2:
-            await on_button_click(inter)
+        if disco.Interaction.data["component_type"] == 2:
+            await on_button_click(disco.Interaction)
     except KeyError:
         pass
 
 
 ## Buttonの処理
-async def on_button_click(inter: discord.Interaction):
+async def on_button_click(disco: discord):
+    inter = disco.Interaction
+    inter_res = disco.InteractionResponse
     custom_id = inter.data["custom_id"]  # inter.dataからcustom_idを取り出す
     if custom_id == "check1":
         if inter.user.id == ADMIN_ID:
-            await inter.response.defer()
+            await inter_res.defer()
             embed = discord.Embed(
                 title="指令破壊実行", description="指令破壊信号【SIGTERM】を送出しました", color=0xFF0000
             )
@@ -243,12 +247,12 @@ async def on_button_click(inter: discord.Interaction):
         embed = discord.Embed(
             title="キャンセル", description="指令破壊をキャンセルしました！よかった～ｗ", color=0xFFFFFF
         )
-    await inter.followup.send(embed=embed)
+    await inter.followup.send(embed=disco.embed)
     await inter.message.edit(view=None)
 
 
 @tree.command(name="command_destruct", description="指令破壊信号を送出し、艦娘を全員轟沈させます")
-async def command_destruct(interaction: discord.Interaction):
+async def command_destruct(interaction: discord.InteractionResponse):
     kill_button = discord.ui.Button(
         label="指令破壊実行", style=discord.ButtonStyle.danger, custom_id="check1"
     )
@@ -258,7 +262,7 @@ async def command_destruct(interaction: discord.Interaction):
     view = discord.ui.View()
     view.add_item(kill_button)
     view.add_item(cancel_button)
-    await interaction.response.send_message("本当に艦娘を指令破壊しますか？", view=view)
+    await interaction.send_message(content="本当に艦娘を指令破壊しますか？", view=view)
 
 
 @tasks.loop(seconds=1)
@@ -325,14 +329,14 @@ async def download_from_s3(jikan, folder_name):
 
 @tree.command(name="join", description="艦娘がボイスチャンネルに来ます")
 async def join_command(
-    interaction: discord.Interaction, channel_name: discord.VoiceChannel
+    disco: discord, channel_name: discord.VoiceChannel
 ):
     if not channel_name:
-        await interaction.response.send_message(f"ボイスチャンネルに接続できませんでした。エラー: {e}")
+        await disco.InteractionResponse.send_message(f"ボイスチャンネルに接続できませんでした。エラー: チャンネルが見つかりません。")
         return
 
     try:
-        await interaction.response.defer()
+        await disco.InteractionResponse.defer()
         fubuki_vc = await fubuki_bot.get_channel(channel_name.id).connect()
         kongou_vc = await kongou_bot.get_channel(channel_name.id).connect()
         pola_vc = await pola_bot.get_channel(channel_name.id).connect()
@@ -344,23 +348,23 @@ async def join_command(
         hagikaze_vc = await hagikaze_bot.get_channel(channel_name.id).connect()
         sagiri_vc = await sagiri_bot.get_channel(channel_name.id).connect()
     except Exception as e:
-        await interaction.response.send_message(f"ボイスチャンネルに接続できませんでした。エラー: {e}")
+        await disco.InteractionResponse.send_message(f"ボイスチャンネルに接続できませんでした。エラー: {e}")
         return
 
     fubuki_msg = f"吹雪以下{str(len(get_all_kanmusu()))}名、{channel_name.name}鎮守府に着任します！"
 
-    await interaction.followup.send(fubuki_msg)
+    await disco.Interaction.followup.send(fubuki_msg)
 
 
 @tree.command(name="talk", description="ブッキーと会話します")
-async def talk_command(interaction: discord.Interaction, message: str):
+async def talk_command(disco: discord, message: str):
     global message_log
 
     if len(message_log) >= 10:
         message_log = message_log[:1] + message_log[4:]
 
     try:
-        await interaction.response.defer()
+        await disco.InteractionResponse.defer()
         message_log.append({"role": "user", "content": message})
         response = send_message_chatgpt(message_log)
         message_log.append({"role": "assistant", "content": response})
@@ -374,7 +378,7 @@ async def talk_command(interaction: discord.Interaction, message: str):
         embed.add_field(name=":woman_student: 回答", value=response, inline=False)
 
         # Embedを送信
-        await interaction.followup.send(embed=embed)
+        await disco.Interaction.followup.send(embed=embed)
         json_message_log = json.dumps(message_log, ensure_ascii=False)
         print(json_message_log)
 
@@ -382,7 +386,7 @@ async def talk_command(interaction: discord.Interaction, message: str):
         user_last_message = message_log[-2]["content"]
 
         save_log = chatgpt_logs(
-            username=interaction.user.display_name,
+            username=disco.Interaction.user.display_name,
             datetime=datetime.now(JST).isoformat(timespec="seconds"),
             usermessage=user_last_message,
             fubukimessage=fubuki_last_message,
@@ -390,17 +394,17 @@ async def talk_command(interaction: discord.Interaction, message: str):
         save_log.save()
 
     except Exception as e:
-        await interaction.response.send_message(f"ブッキーと会話できませんでした。エラー: {e}")
+        await disco.InteractionResponse.send_message(f"ブッキーと会話できませんでした。エラー: {e}")
         return
 
 
 @tree.command(name="reset", description="ブッキーが記憶を失います")
-async def reset_command(interaction: discord.Interaction):
+async def reset_command(interaction: discord.InteractionResponse):
     global message_log
     message_log = message_log[:1]
 
     # リセットメッセージの送信
-    await interaction.response.send_message(":zany_face: 私は記憶を失いました。な～んにもわからないです！")
+    await interaction.send_message(":zany_face: 私は記憶を失いました。な～んにもわからないです！")
 
 
 @tree.command(name="select", description="時報担当艦を選択します。")
@@ -411,7 +415,7 @@ async def reset_command(interaction: discord.Interaction):
     ]
 )
 async def select_kanmusu_command(
-    interaction: discord.Interaction, kanmusu_name: app_commands.Choice[int]
+    interaction: discord.InteractionResponse, kanmusu_name: app_commands.Choice[int]
 ):
     global Kanmusu
     global kanmusu_select_n
@@ -429,7 +433,7 @@ async def select_kanmusu_command(
         value=f"{Kanmusu.Name_J}",
         inline=False,
     )
-    await interaction.response.send_message(embed=embed)
+    await interaction.send_message(embed=embed)
 
 
 # 全ての艦娘を取得する関数
@@ -459,9 +463,9 @@ async def get_kanmusu_list_embed() -> discord.Embed:
 
 # treeコマンドの定義
 @tree.command(name="kanmusu_list", description="所属している艦娘一覧を表示します")
-async def kanmusu_list_command(interaction: discord.Interaction):
+async def kanmusu_list_command(interaction: discord.InteractionResponse):
     embed = await get_kanmusu_list_embed()
-    await interaction.response.send_message(embed=embed)
+    await interaction.send_message(embed=embed)
 
 
 async def send_shutdown_notification():
@@ -480,6 +484,22 @@ async def send_shutdown_notification():
 def handle_sigterm(signal, frame):
     loop_sigterm = asyncio.get_event_loop()
     loop_sigterm.create_task(send_shutdown_notification())
+
+
+logger = logging.getLogger('discord')
+logger.setLevel(logging.DEBUG)
+logging.getLogger('discord.http').setLevel(logging.INFO)
+
+handler = logging.handlers.RotatingFileHandler(
+    filename='discord.log',
+    encoding='utf-8',
+    maxBytes=32 * 1024 * 1024,  # 32 MiB
+    backupCount=5,  # Rotate through 5 files
+)
+dt_fmt = '%Y-%m-%d %H:%M:%S'
+formatter = logging.Formatter('[{asctime}] [{levelname:<8}] {name}: {message}', dt_fmt, style='{')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
 
 signal.signal(signal.SIGTERM, handle_sigterm)
 
